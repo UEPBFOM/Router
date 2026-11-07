@@ -10,6 +10,8 @@ export function fail(status: number, message: string, details?: string[]) {
   return NextResponse.json({ error: { message, details } }, { status });
 }
 
+export const unauthorized = () => fail(401, "请先登录");
+
 // request.json() 在请求体不是合法 JSON 时会抛错，这里把它变成 undefined，交给校验函数处理。
 export async function readJson(request: Request): Promise<unknown> {
   try {

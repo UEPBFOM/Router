@@ -1,5 +1,6 @@
 // 数据访问层（Repository）。
-// 已从内存 Map 换成 Postgres（Drizzle）；方法名和参数没变，所以 Route Handler 基本不用改。
+// 每个方法第一个参数都是 userId，所有查询都带上 user_id = 当前用户 的条件：
+// 别人的 todo 对当前用户来说就是"不存在"，查不到、改不了、删不掉。
 
 import { and, desc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "@/db";
@@ -15,9 +16,14 @@ function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
+// "这一条 todo，并且属于这个用户"
+function owned(userId: string, id: string) {
+  return and(eq(todos.id, id), eq(todos.userId, userId));
+}
+
 export const todoStore = {
-  async list(filter: ListTodoFilter = {}): Promise<Todo[]> {
-    const conditions: SQL[] = [];
+  async list(userId: string, filter: ListTodoFilter = {}): Promise<Todo[]> {
+    const conditions: SQL[] = [eq(todos.userId, userId)];
     if (filter.completed !== undefined) conditions.push(eq(todos.completed, filter.completed));
     if (filter.q) conditions.push(ilike(todos.title, `%${escapeLike(filter.q)}%`));
 
@@ -28,23 +34,29 @@ export const todoStore = {
       .orderBy(desc(todos.createdAt));
   },
 
-  async get(id: string): Promise<Todo | null> {
-    const [todo] = await db.select().from(todos).where(eq(todos.id, id));
+  async get(userId: string, id: string): Promise<Todo | null> {
+    const [todo] = await db.select().from(todos).where(owned(userId, id));
     return todo ?? null;
   },
 
-  async create(input: CreateTodoInput): Promise<Todo> {
-    const [todo] = await db.insert(todos).values(input).returning();
+  async create(userId: string, input: CreateTodoInput): Promise<Todo> {
+    const [todo] = await db
+      .insert(todos)
+      .values({ ...input, userId })
+      .returning();
     return todo;
   },
 
-  async update(id: string, input: UpdateTodoInput): Promise<Todo | null> {
-    const [todo] = await db.update(todos).set(input).where(eq(todos.id, id)).returning();
+  async update(userId: string, id: string, input: UpdateTodoInput): Promise<Todo | null> {
+    const [todo] = await db.update(todos).set(input).where(owned(userId, id)).returning();
     return todo ?? null;
   },
 
-  async remove(id: string): Promise<boolean> {
-    const deleted = await db.delete(todos).where(eq(todos.id, id)).returning({ id: todos.id });
+  async remove(userId: string, id: string): Promise<boolean> {
+    const deleted = await db
+      .delete(todos)
+      .where(owned(userId, id))
+      .returning({ id: todos.id });
     return deleted.length > 0;
   },
 };
