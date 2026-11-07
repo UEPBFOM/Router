@@ -1,74 +1,50 @@
 // 数据访问层（Repository）。
-// 现在是内存实现；第二步接数据库时只需把这里换成 ORM 调用，
-// Route Handler 不用改 —— 这就是把"存储"和"HTTP"分开的意义。
+// 已从内存 Map 换成 Postgres（Drizzle）；方法名和参数没变，所以 Route Handler 基本不用改。
 
-import { randomUUID } from "node:crypto";
+import { and, desc, eq, ilike, type SQL } from "drizzle-orm";
+import { db } from "@/db";
+import { todos, type Todo } from "@/db/schema";
 
-export type Todo = {
-  id: string;
-  title: string;
-  completed: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-
+export type { Todo };
 export type CreateTodoInput = { title: string; completed?: boolean };
 export type UpdateTodoInput = { title?: string; completed?: boolean };
 export type ListTodoFilter = { completed?: boolean; q?: string };
 
-// 开发模式下热更新会重新执行模块，挂在 globalThis 上避免数据被清空。
-const globalForStore = globalThis as unknown as { todos?: Map<string, Todo> };
-const todos = (globalForStore.todos ??= seed());
-
-function seed(): Map<string, Todo> {
-  const now = new Date().toISOString();
-  const items: Todo[] = [
-    { id: randomUUID(), title: "学习 Route Handler", completed: true, createdAt: now, updatedAt: now },
-    { id: randomUUID(), title: "接入数据库和 ORM", completed: false, createdAt: now, updatedAt: now },
-  ];
-  return new Map(items.map((t) => [t.id, t]));
+// LIKE 里 % 和 _ 是通配符，用户搜索的文字要转义，否则搜 "100%" 会匹配到意料之外的结果
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
-// 方法都写成 async：以后换成数据库查询时签名不变。
 export const todoStore = {
   async list(filter: ListTodoFilter = {}): Promise<Todo[]> {
-    let result = [...todos.values()];
-    if (filter.completed !== undefined) {
-      result = result.filter((t) => t.completed === filter.completed);
-    }
-    if (filter.q) {
-      const q = filter.q.toLowerCase();
-      result = result.filter((t) => t.title.toLowerCase().includes(q));
-    }
-    return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const conditions: SQL[] = [];
+    if (filter.completed !== undefined) conditions.push(eq(todos.completed, filter.completed));
+    if (filter.q) conditions.push(ilike(todos.title, `%${escapeLike(filter.q)}%`));
+
+    return db
+      .select()
+      .from(todos)
+      .where(and(...conditions))
+      .orderBy(desc(todos.createdAt));
   },
 
   async get(id: string): Promise<Todo | null> {
-    return todos.get(id) ?? null;
+    const [todo] = await db.select().from(todos).where(eq(todos.id, id));
+    return todo ?? null;
   },
 
   async create(input: CreateTodoInput): Promise<Todo> {
-    const now = new Date().toISOString();
-    const todo: Todo = {
-      id: randomUUID(),
-      title: input.title,
-      completed: input.completed ?? false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    todos.set(todo.id, todo);
+    const [todo] = await db.insert(todos).values(input).returning();
     return todo;
   },
 
   async update(id: string, input: UpdateTodoInput): Promise<Todo | null> {
-    const existing = todos.get(id);
-    if (!existing) return null;
-    const updated: Todo = { ...existing, ...input, updatedAt: new Date().toISOString() };
-    todos.set(id, updated);
-    return updated;
+    const [todo] = await db.update(todos).set(input).where(eq(todos.id, id)).returning();
+    return todo ?? null;
   },
 
   async remove(id: string): Promise<boolean> {
-    return todos.delete(id);
+    const deleted = await db.delete(todos).where(eq(todos.id, id)).returning({ id: todos.id });
+    return deleted.length > 0;
   },
 };
