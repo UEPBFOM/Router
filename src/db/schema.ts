@@ -2,6 +2,9 @@
 
 import { boolean, index, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 
+// Better Auth 的 user / session / account / verification 表，由 `npx auth generate` 生成，不要手改
+export * from "./auth-schema";
+
 export const todos = pgTable(
   "todos",
   {
